@@ -8,6 +8,8 @@ App React trong `analysis/app/` tráng ảnh ngay trong tab:
 
 `analysis/tools/*.py` là chuẩn đối chiếu và công cụ build lite pack. Từ đây có hai bản của pipeline: sửa một bước trong Python thì phải sửa `core/` và `develop.wgsl`, rồi chạy lại golden. `tools/latent_lite.py` và `core/src/lite.rs` phải đổi cùng nhau khi đổi định dạng pack.
 
+Trang nhận raw `.CR2 .CR3 .ARW .NEF .NRW .DNG .ORF .RW2 .PEF` (danh sách ở `app/src/lib/kit.ts`), với cảm biến Bayer RGGB mà LibRaw có ColorMatrix. Không nhận RAF/X-Trans. Make/Model/Orientation lấy từ IFD0 nếu file là TIFF, từ hộp `CMT1` nếu là CR3, còn không thì từ make/model/flip của LibRaw (`core/src/meta.rs`, `read_meta`). Màu mới chỉ được kiểm chứng trên 5D, 1D X và A7 III.
+
 Kit `.LTP`/`GRAIN.LTG` và backend HTTP không còn trong bản web. Muốn dùng `.LTP` thì dùng CLI `tools/latent_develop.py`.
 
 ## Build

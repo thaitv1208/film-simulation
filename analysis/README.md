@@ -366,7 +366,8 @@ uv run analysis/tools/latent_develop.py DSC08975.ARW P400 --exposure 0.7     # +
 - So với ma trận Adobe dựng cho cùng WB D50 (2.32/1/1.59), hai bên gần như trùng ở hàng G (`−0.14 1.48 −0.34` / `−0.17 1.58 −0.41`) và hàng B. Khác nhau ở hàng R: Adobe `1.65 −0.51 −0.14`, DxO `2.10 −0.96 −0.14`, nên bản DxO bão hòa đỏ/cam hơn. DxO không thích nghi theo nguồn sáng, nên nó chỉ đúng nhất khi ánh sáng gần D50.
 - `BASELINE_EXPOSURE` mặc định là 0 cho máy ngoài 5D. Chưa đo bằng thẻ xám. Với `DSC08975.ARW` (cảnh đêm), ảnh ra tối hơn JPEG nhúng của Sony khoảng 0,5–0,7 EV; JPEG của Sony có nâng vùng tối nên chưa kết luận được.
 - Seed grain mặc định là `A:/DCIM/100MSDCF/<TÊN>`. Hạt được sinh theo pixel đầu ra, nên ở 6000×4000 hạt trông mịn hơn so với 4368×2912 của 5D. Hai hệ số halation được khớp theo ảnh 5D, chưa đối chiếu cho Sony.
-- App web (mục 6.2) cũng liệt kê và nhận `.ARW`.
+- App web (mục 6.2) nhận các đuôi `.CR2 .CR3 .ARW .NEF .NRW .DNG .ORF .RW2 .PEF`. CLI không xét đuôi file mà đọc cùng loại container: raw dạng TIFF hoặc CR3. Cả hai đều cần cảm biến Bayer RGGB và LibRaw có ColorMatrix cho máy đó. Không nhận RAF (X-Trans). Make/Model/Orientation lấy từ IFD0 của file TIFF; CR3 không phải TIFF nên lấy từ hộp `CMT1` (một TIFF riêng). Container khác thì CLI báo `unsupported raw container`, còn engine web dùng make/model/flip của LibRaw.
+- Màu mới chỉ được kiểm chứng trên 5D, 1D X và A7 III. Các máy khác chạy cùng nhánh LibRaw nhưng `BASELINE_EXPOSURE` mặc định 0, seed grain dùng `A:/DCIM/100CAMERA/<TÊN>` (Canon khác 1D X dùng `100EOS5D`), và chưa so với ảnh thật.
 
 **Canon EOS-1D X** (`IMGL6133.CR2`): CR2 của máy khác 5D không đi theo bảng firmware mà theo nhánh LibRaw ở trên (ColorData 1316 mục, khác 796 của 5D).
 - Adobe ColorMatrix: `[0.6847 −0.0614 −0.1014; −0.4669 1.2737 0.2139; −0.1197 0.2488 0.6846]`; đen/trắng 2048 / 15094; crop 5184×3456.

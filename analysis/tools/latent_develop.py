@@ -113,9 +113,8 @@ DXO_MATRICES = {
 CARD_DIRS = {"Canon EOS-1D X": "100EOS1D", "Canon": "100EOS5D", "SONY": "100MSDCF"}
 
 
-def read_tiff_meta(path):
-    """Make / Model / Orientation from IFD0 of a TIFF-based raw (ARW, NEF, DNG, ...)."""
-    d = open(path, "rb").read(1 << 16)
+def _parse_tiff_ifd0(d):
+    """Make / Model / Orientation from IFD0 of a TIFF; offsets are relative to the start of d."""
     e = {b"II": "<", b"MM": ">"}.get(d[:2])
     if e is None:
         raise ValueError("not a TIFF-based raw file")
@@ -130,6 +129,37 @@ def read_tiff_meta(path):
             tags[tag] = struct.unpack_from(e + "H", val)[0]
     return {"make": tags.get(0x10F, "").strip(), "model": tags.get(0x110, "").strip(),
             "orientation": tags.get(0x112, 1)}
+
+
+def _find_cmt1(d):
+    """Payload of a CR3's CMT1 box (a TIFF holding IFD0); the box size is the big-endian
+    u32 right before the tag. d: the first MB of the file."""
+    at = d.find(b"CMT1", 4)
+    while at >= 0:
+        size = struct.unpack_from(">I", d, at - 4)[0]
+        end = at - 4 + size
+        if size > 8 and end <= len(d) and d[at + 4:at + 6] in (b"II", b"MM"):
+            return d[at + 4:end]
+        at = d.find(b"CMT1", at + 1)
+    return None
+
+
+def read_tiff_meta(path):
+    """Make / Model / Orientation: IFD0 of a TIFF-based raw (ARW, NEF, DNG, ...), else the
+    CR3's CMT1 box. core/src/meta.rs read_meta does the same, then falls back to LibRaw."""
+    with open(path, "rb") as f:
+        d = f.read(1 << 20)
+    try:
+        return _parse_tiff_ifd0(d[:1 << 16])
+    except (ValueError, struct.error):
+        pass
+    cmt1 = _find_cmt1(d)
+    if cmt1 is not None:
+        try:
+            return _parse_tiff_ifd0(cmt1)
+        except (ValueError, struct.error):
+            pass
+    raise ValueError("unsupported raw container")
 
 
 def open_raw(path, autoexec, matrix="adobe", exposure=0.0):
