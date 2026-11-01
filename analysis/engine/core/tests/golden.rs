@@ -89,6 +89,10 @@ fn raw_info(m: &Value) -> RawInfo {
         top_margin: size[2],
         left_margin: size[3],
         crop: u4("crop"),
+        // Golden raws are CR2/ARW: IFD0 always wins over LibRaw's make/model/flip.
+        make: String::new(),
+        model: String::new(),
+        flip: 0,
     }
 }
 

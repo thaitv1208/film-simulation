@@ -1,7 +1,12 @@
 import type { DirectoryHandle, KitFile } from "@/lib/types";
 
-export const KIT_FILE = /(^|\/)([^/]+\.CR2|[^/]+\.ARW|firmware\.bin|film\.json|traits\.json|tables\.bin|curves\.bin|(paper|grain)\d+\.bin)$/i;
-export const RAW_FILE = /\.(cr2|arw)$/i;
+// Raws the page takes: Bayer sensors LibRaw reads. Colour is checked only on the 5D, 1D X and A7 III.
+export const RAW_EXTS = ["cr2", "cr3", "arw", "nef", "nrw", "dng", "orf", "rw2", "pef"];
+export const RAW_FILE = new RegExp(`\\.(${RAW_EXTS.join("|")})$`, "i");
+export const RAW_LABEL = RAW_EXTS.map((e) => "." + e.toUpperCase()).join(" ");
+export const RAW_ACCEPT = RAW_EXTS.flatMap((e) => ["." + e, "." + e.toUpperCase()]).join(",");
+export const KIT_FILE = new RegExp(
+  `(^|\\/)([^/]+\\.(${RAW_EXTS.join("|")})|firmware\\.bin|film\\.json|traits\\.json|tables\\.bin|curves\\.bin|(paper|grain)\\d+\\.bin)$`, "i");
 
 export async function walk(dir: DirectoryHandle, prefix = "", depth = 0, out: KitFile[] = []) {
   for await (const [name, h] of dir.entries()) {

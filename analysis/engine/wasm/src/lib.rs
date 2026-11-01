@@ -14,6 +14,8 @@ use std::ffi::{c_char, CStr};
 struct Opened {
     raw: Raw,
     data: Vec<u8>,
+    /// Taken at open: lr_decode rewrites LibRaw's sizes and colour data (flip becomes user_flip).
+    info: RawInfo,
 }
 
 impl Decoder for Opened {
@@ -22,22 +24,7 @@ impl Decoder for Opened {
     }
 
     fn info(&self) -> RawInfo {
-        let m = self.raw.meta();
-        RawInfo {
-            colors: m.colors,
-            filters: m.filters,
-            black_level_per_channel: m.cblack.map(|c| m.black + c),
-            linear_max: m.linear_max,
-            maximum: m.maximum,
-            cam_mul: m.cam_mul,
-            pre_mul: m.pre_mul,
-            cam_xyz: [m.cam_xyz[0], m.cam_xyz[1], m.cam_xyz[2]],
-            width: m.width,
-            height: m.height,
-            top_margin: m.top_margin,
-            left_margin: m.left_margin,
-            crop: [m.crop_left, m.crop_top, m.crop_width, m.crop_height],
-        }
+        self.info.clone()
     }
 
     fn decode(&mut self, half: bool, black: i32, white: i32) -> Result<(Vec<u16>, usize, usize), String> {
@@ -45,9 +32,39 @@ impl Decoder for Opened {
     }
 }
 
+/// LibRaw's side of an opened raw, before any decode.
+fn raw_info(raw: &Raw) -> RawInfo {
+    let m = raw.meta();
+    RawInfo {
+        colors: m.colors,
+        filters: m.filters,
+        black_level_per_channel: m.cblack.map(|c| m.black + c),
+        linear_max: m.linear_max,
+        maximum: m.maximum,
+        cam_mul: m.cam_mul,
+        pre_mul: m.pre_mul,
+        cam_xyz: [m.cam_xyz[0], m.cam_xyz[1], m.cam_xyz[2]],
+        width: m.width,
+        height: m.height,
+        top_margin: m.top_margin,
+        left_margin: m.left_margin,
+        crop: [m.crop_left, m.crop_top, m.crop_width, m.crop_height],
+        make: c_text(&m.make),
+        model: c_text(&m.model),
+        flip: m.flip,
+    }
+}
+
+/// A NUL-terminated char array of LrMeta.
+fn c_text(b: &[u8]) -> String {
+    let end = b.iter().position(|c| *c == 0).unwrap_or(b.len());
+    String::from_utf8_lossy(&b[..end]).trim().to_string()
+}
+
 fn open(data: Vec<u8>) -> Result<Box<dyn Decoder>, String> {
     let raw = Raw::open(&data)?;
-    Ok(Box::new(Opened { raw, data }))
+    let info = raw_info(&raw);
+    Ok(Box::new(Opened { raw, data, info }))
 }
 
 #[derive(Default)]
@@ -184,8 +201,9 @@ pub unsafe extern "C" fn engine_thumb(data: *mut u8, len: usize) -> *const u8 {
     with(|s| {
         let r = (|| {
             let mut raw = Raw::open(&data)?;
+            let info = raw_info(&raw);
             let t = raw.thumb()?;
-            let opened = Opened { raw, data };
+            let opened = Opened { raw, data, info };
             let orientation = s.studio.as_ref().ok_or("engine_init has not run")?.orientation(&opened)?;
             let v = json!({"jpeg": t.jpeg, "width": t.width, "height": t.height, "orientation": orientation});
             s.blob = t.data;

@@ -7,7 +7,7 @@ const COLORDATA_WB_INDEX: usize = 0x3F;
 const CANON_CROP: [usize; 4] = [10, 6, 4368, 2912];
 
 /// LibRaw's side of a raw, as rawpy reports it. Filled by the wasm crate.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RawInfo {
     pub colors: i32,
     pub filters: u32,
@@ -24,6 +24,11 @@ pub struct RawInfo {
     pub left_margin: u32,
     /// cleft, ctop, cwidth, cheight. 0xFFFF in the first two means no position.
     pub crop: [u32; 4],
+    /// LibRaw's make / model / flip: only used when the file carries neither a TIFF IFD0
+    /// nor a CR3 CMT1 box.
+    pub make: String,
+    pub model: String,
+    pub flip: i32,
 }
 
 #[derive(Debug)]
@@ -64,9 +69,8 @@ struct TiffMeta {
     orientation: u32,
 }
 
-/// Make / Model / Orientation from IFD0 of a TIFF-based raw (ARW, NEF, DNG, ...).
-fn read_tiff_meta(data: &[u8]) -> Result<TiffMeta> {
-    let d = &data[..data.len().min(1 << 16)];
+/// Make / Model / Orientation from IFD0 of a TIFF. Offsets are relative to the start of `d`.
+fn parse_tiff_ifd0(d: &[u8]) -> Result<TiffMeta> {
     let big = match d.get(..2) {
         Some(b"II") => false,
         Some(b"MM") => true,
@@ -91,6 +95,54 @@ fn read_tiff_meta(data: &[u8]) -> Result<TiffMeta> {
         }
     }
     Ok(m)
+}
+
+/// The payload of a CR3's `CMT1` box (a TIFF holding IFD0), searched for in the first MB:
+/// the box size is the big-endian u32 right before the tag.
+fn find_cmt1(data: &[u8]) -> Option<&[u8]> {
+    let d = &data[..data.len().min(1 << 20)];
+    let mut from = 4;
+    while let Some(i) = d.get(from..)?.windows(4).position(|w| w == b"CMT1") {
+        let at = from + i;
+        let size = u32::from_be_bytes(d[at - 4..at].try_into().unwrap()) as usize;
+        let end = (at - 4).checked_add(size);
+        if let Some(end) = end.filter(|e| size > 8 && *e <= d.len()) {
+            if matches!(d.get(at + 4..at + 6), Some(b"II" | b"MM")) {
+                return Some(&d[at + 4..end]);
+            }
+        }
+        from = at + 1;
+    }
+    None
+}
+
+/// LibRaw's flip back to a TIFF Orientation; LibRaw maps Orientation o to `"50132467"[o & 7]`.
+fn flip_to_orientation(flip: i32) -> u32 {
+    match flip {
+        0 => 1,
+        1 => 2,
+        2 => 4,
+        3 => 3,
+        4 => 5,
+        5 => 8,
+        6 => 6,
+        7 => 7,
+        _ => 1,
+    }
+}
+
+/// Make / Model / Orientation: IFD0 of a TIFF-based raw (ARW, NEF, DNG, ...), else the CR3's
+/// CMT1 box, else what LibRaw found.
+/// LibRaw's make/model are normalised ("Sony", model without the make), so they may not match
+/// the IFD0 strings that `card_dir` and `baseline_for` compare against.
+fn read_meta(data: &[u8], info: &RawInfo) -> TiffMeta {
+    parse_tiff_ifd0(&data[..data.len().min(1 << 16)])
+        .or_else(|_| find_cmt1(data).ok_or(String::new()).and_then(parse_tiff_ifd0))
+        .unwrap_or_else(|_| TiffMeta {
+            make: info.make.trim().to_string(),
+            model: info.model.trim().to_string(),
+            orientation: flip_to_orientation(info.flip),
+        })
 }
 
 /// The 5D's own: orientation and the WB words of ColorData.
@@ -142,7 +194,7 @@ fn card_dir(model: &str, make: &str) -> &'static str {
 
 /// `data` is the file; `info` comes from LibRaw, and the 5D's table replaces most of it.
 pub fn open_raw(data: &[u8], fw: &Firmware, info: &RawInfo) -> Result<Source> {
-    let tiff = read_tiff_meta(data)?;
+    let tiff = read_meta(data, info);
     let table = camera_table(fw)?;
     let is_table_camera = data.get(8..10) == Some(b"CR") && tiff.model == table.model;
     let (make, orientation, cm, black, white, baseline, wb3, wb4, crop);
@@ -206,4 +258,107 @@ pub fn open_raw(data: &[u8], fw: &Firmware, info: &RawInfo) -> Result<Source> {
         white,
         crop,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A little-endian TIFF whose IFD0 holds Make, Model and Orientation.
+    fn tiff(make: &str, model: &str, orientation: u16) -> Vec<u8> {
+        let mut d = b"II*\0".to_vec();
+        d.extend(8u32.to_le_bytes());
+        d.extend(3u16.to_le_bytes());
+        let strings = 8 + 2 + 3 * 12 + 4;
+        let mut tail = Vec::new();
+        for (tag, s) in [(0x10Fu16, make), (0x110, model)] {
+            let mut v = s.as_bytes().to_vec();
+            v.push(0);
+            d.extend(tag.to_le_bytes());
+            d.extend(2u16.to_le_bytes());
+            d.extend((v.len() as u32).to_le_bytes());
+            d.extend(((strings + tail.len()) as u32).to_le_bytes());
+            tail.extend(v);
+        }
+        d.extend(0x112u16.to_le_bytes());
+        d.extend(3u16.to_le_bytes());
+        d.extend(1u32.to_le_bytes());
+        d.extend((orientation as u32).to_le_bytes());
+        d.extend(0u32.to_le_bytes());
+        d.extend(tail);
+        d
+    }
+
+    fn n_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut b = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        b.extend(kind);
+        b.extend(payload);
+        b
+    }
+
+    /// ftyp, then moov/uuid holding a CMT1 box, like a CR3.
+    fn cr3(cmt1: &[u8]) -> Vec<u8> {
+        let mut uuid = vec![0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48];
+        uuid.extend(n_box(b"CNCV", b"CanonCR3_001/00.09.00/00.00.00"));
+        uuid.extend(n_box(b"CMT1", cmt1));
+        let mut d = n_box(b"ftyp", b"crx \0\0\0\x01crx isom");
+        d.extend(n_box(b"moov", &n_box(b"uuid", &uuid)));
+        d.extend(vec![0xAB; 4096]);
+        d
+    }
+
+    fn libraw() -> RawInfo {
+        RawInfo { make: "Fooma".into(), model: "X 1".into(), flip: 5, ..Default::default() }
+    }
+
+    #[test]
+    fn tiff_ifd0_wins() {
+        let m = read_meta(&tiff("SONY", "ILCE-7M3", 6), &libraw());
+        assert_eq!((m.make.as_str(), m.model.as_str(), m.orientation), ("SONY", "ILCE-7M3", 6));
+    }
+
+    #[test]
+    fn cr3_reads_cmt1() {
+        let data = cr3(&tiff("Canon", "Canon EOS RP", 8));
+        assert_eq!(&data[8..10], b"cr");
+        let m = read_meta(&data, &libraw());
+        assert_eq!((m.make.as_str(), m.model.as_str(), m.orientation), ("Canon", "Canon EOS RP", 8));
+    }
+
+    #[test]
+    fn cmt1_that_is_not_a_tiff_is_skipped() {
+        let mut data = cr3(b"nope, not a TIFF");
+        assert!(find_cmt1(&data).is_none());
+        // The next CMT1 after a rejected one is found.
+        data.truncate(data.len() - 4096);
+        data.extend(n_box(b"CMT1", &tiff("Canon", "Canon EOS R5", 1)));
+        assert_eq!(parse_tiff_ifd0(find_cmt1(&data).unwrap()).unwrap().model, "Canon EOS R5");
+        let mut bad = b"\xff\xff\xff\xffCMT1II".to_vec();
+        bad.extend(vec![0; 64]);
+        assert!(find_cmt1(&bad).is_none());
+        // A bogus size (u32::MAX) before a tag past offset 4 is skipped, and the valid box after it found.
+        let mut bogus = n_box(b"ftyp", b"crx ");
+        bogus.extend(u32::MAX.to_be_bytes());
+        bogus.extend(b"CMT1II*\0");
+        bogus.extend(n_box(b"CMT1", &tiff("Canon", "Canon EOS R6", 3)));
+        let m = parse_tiff_ifd0(find_cmt1(&bogus).unwrap()).unwrap();
+        assert_eq!((m.model.as_str(), m.orientation), ("Canon EOS R6", 3));
+    }
+
+    #[test]
+    fn other_containers_use_libraw() {
+        let m = read_meta(b"\0\0\0\x10FOOBlorem ipsum dolor", &libraw());
+        assert_eq!((m.make.as_str(), m.model.as_str(), m.orientation), ("Fooma", "X 1", 8));
+    }
+
+    #[test]
+    fn flip_table_inverts_libraw() {
+        // LibRaw: flip = "50132467"[orientation & 7].
+        for o in 1..=8u32 {
+            let flip = (b"50132467"[(o & 7) as usize] - b'0') as i32;
+            assert_eq!(flip_to_orientation(flip), o);
+        }
+        assert_eq!([0, 3, 5, 6].map(flip_to_orientation), [1, 3, 8, 6]);
+        assert_eq!(flip_to_orientation(-1), 1);
+    }
 }

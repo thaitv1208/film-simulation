@@ -4,9 +4,9 @@
 // when the engine asks for it, so a session downloads only the papers it uses.
 import { Gpu } from "@/engine/gpu";
 import { loadEngine, type Engine, type Prepared, type Reply } from "@/engine/wasm";
+import { RAW_FILE as RAW_RE, RAW_LABEL } from "@/lib/kit";
 import type { KitFile, RawFile } from "@/lib/types";
 
-const RAW_RE = /\.(cr2|arw)$/i;
 const FILM_JSON = /(^|\/)([^/]+)\/film\.json$/;
 
 interface Lite { base: string; files: Record<string, [number, string]>; cache: Cache | null }
@@ -165,7 +165,7 @@ const ops: Record<string, (args: any) => unknown> = {
   },
   async upload({ name, data }: { name: string; data: ArrayBuffer }) {
     const safe = name.replace(/^.*[\\/]/, "").replace(/[^A-Za-z0-9._ -]/g, "_");
-    if (!RAW_RE.test(safe)) throw new Error("only .CR2/.ARW files are accepted");
+    if (!RAW_RE.test(safe)) throw new Error(`only ${RAW_LABEL} files are accepted`);
     const bytes = new Uint8Array(data);
     const r = engine.check(bytes);
     if ("error" in r) throw new Error(`${safe}: ${r.error}`);

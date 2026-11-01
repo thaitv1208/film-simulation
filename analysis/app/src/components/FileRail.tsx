@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "cn";
-import { RAW_FILE } from "@/lib/kit";
+import { RAW_ACCEPT, RAW_FILE, RAW_LABEL } from "@/lib/kit";
 import type { Backend, RawFile } from "@/lib/types";
 
 function Thumb({ id, backend }: { id: string; backend: Backend }) {
@@ -54,10 +54,11 @@ export function FileRail({ files, selected, backend, onSelect, onUpload }: Props
           over && "border-primary text-foreground",
         )}
       >
-        Drop .CR2 / .ARW here<br />or click to add
+        Drop raws here<br />or click to add
+        <span className="mt-1 block text-[10px] leading-snug opacity-75">{RAW_LABEL}</span>
       </button>
       <input
-        ref={picker} type="file" accept=".cr2,.CR2,.arw,.ARW" multiple hidden
+        ref={picker} type="file" accept={RAW_ACCEPT} multiple hidden
         onChange={(e) => onUpload([...(e.target.files ?? [])])}
       />
       {files.map((f) => (
